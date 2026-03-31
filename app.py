@@ -1,10 +1,25 @@
-﻿選択肢,前回,今回
-年齢が上の人が絶対という雰囲気があるから,0.0,0.0
-発言しづらい慣習が職場にあるから,16.7,45.5
-上の人が下の人に言いにくい雰囲気があるから,33.3,9.1
-どうせ自分の意見を言っても受け入れられないから,16.7,27.3
-そもそも職場で上司やメンバーと接する機会がないから,0.0,27.3
-現在の仕事に就いたばかりで、仕事に精通していないから,0.0,18.2
-周りの職場メンバーが忙しそうだから,33.3,0.0
-言ったことで仕事が増えると困るから,16.7,9.1
-その他,33.3,9.1
+import json
+from pathlib import Path
+
+import pandas as pd
+import plotly.express as px
+import plotly.graph_objects as go
+import streamlit as st
+
+st.set_page_config(page_title="フィードバック資料", layout="wide")
+
+DATA = Path(__file__).parent / "data"
+
+metadata = json.loads((DATA / "metadata.json").read_text(encoding="utf-8"))
+scores = pd.read_csv(DATA / "scores.csv")
+category_summary = pd.read_csv(DATA / "category_summary.csv")
+
+st.title("フィードバック資料（クラウド版）")
+
+st.write(f"部門：{metadata['department_name']}")
+st.write(f"回答者数：{metadata['org_response_sample']}")
+
+st.subheader("カテゴリ別スコア")
+
+fig = px.bar(category_summary, x="カテゴリ", y="今回")
+st.plotly_chart(fig)
