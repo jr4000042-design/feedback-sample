@@ -1,0 +1,168 @@
+
+import json
+from pathlib import Path
+
+import pandas as pd
+import plotly.express as px
+import plotly.graph_objects as go
+import streamlit as st
+
+st.set_page_config(page_title="フィードバック資料クラウド版サンプル", page_icon="📊", layout="wide")
+
+BASE = Path(__file__).parent
+DATA = BASE / "data"
+
+@st.cache_data
+def load_data():
+    metadata = json.loads((DATA / "metadata.json").read_text(encoding="utf-8"))
+    scores = pd.read_csv(DATA / "scores.csv")
+    category_summary = pd.read_csv(DATA / "category_summary.csv")
+    top_rank = pd.read_csv(DATA / "top_rank.csv")
+    bottom_rank = pd.read_csv(DATA / "bottom_rank.csv")
+    engagement_layers = pd.read_csv(DATA / "engagement_layers.csv")
+    q18 = pd.read_csv(DATA / "q18.csv")
+    q32 = pd.read_csv(DATA / "q32.csv")
+    return metadata, scores, category_summary, top_rank, bottom_rank, engagement_layers, q18, q32
+
+metadata, scores, category_summary, top_rank, bottom_rank, engagement_layers, q18, q32 = load_data()
+
+st.title("📊 フィードバック資料 クラウド版サンプル")
+st.caption("Excel配布の代わりに、ブラウザで確認・深掘りできる見せ方の試作です。今回はアップロードされたサンプル.xlsxを元に構成しています。")
+
+with st.sidebar:
+    st.header("閲覧情報")
+    st.write(f"**部門名**: {metadata['department_name']}")
+    st.write(f"**調査期間**: {metadata['survey_period']}")
+    st.write(f"**回答者数**: {metadata['org_response_sample']}名")
+    st.markdown("---")
+    st.write("**本番化のときに追加する想定**")
+    st.write("- ログイン認証")
+    st.write("- 組織別の閲覧制御")
+    st.write("- 調査回の切替")
+    st.write("- 他ファイルの一括読込")
+
+# Top metrics
+col1, col2, col3, col4 = st.columns(4)
+sample_now = scores["当組織今回"].mean()
+sample_prev = scores["当組織前回"].mean()
+overall = scores["職員全体"].mean()
+gap = sample_now - overall
+
+col1.metric("当組織平均", f"{sample_now:.2f}")
+col2.metric("前回平均との差", f"{sample_now-sample_prev:+.2f}")
+col3.metric("職員全体平均との差", f"{gap:+.2f}")
+col4.metric("回答者数", f"{int(metadata['org_response_sample'])}名")
+
+tab1, tab2, tab3, tab4 = st.tabs(["概要", "設問スコア", "5択以外", "ランキング"])
+
+with tab1:
+    left, right = st.columns([1.1, 1])
+    with left:
+        st.subheader("カテゴリ別スコアの概観")
+        radar_df = category_summary.dropna(subset=["今回"]).copy()
+        cats = radar_df["カテゴリ"].tolist()
+        fig = go.Figure()
+        for series, name in [("今回", "当組織今回"), ("前回", "当組織前回"), ("職員全体", "職員全体")]:
+            values = radar_df[series].tolist()
+            fig.add_trace(go.Scatterpolar(
+                r=values + values[:1],
+                theta=cats + cats[:1],
+                fill="toself" if series == "今回" else None,
+                name=name,
+                opacity=0.6
+            ))
+        fig.update_layout(
+            height=500,
+            polar=dict(radialaxis=dict(visible=True, range=[2.5, 5])),
+            legend=dict(orientation="h", y=1.12)
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+    with right:
+        st.subheader("カテゴリ別サマリー")
+        summary = category_summary[["カテゴリ", "今回", "前回", "職員全体"]].copy()
+        summary["前回差"] = (summary["今回"] - summary["前回"]).round(2)
+        summary["全体差"] = (summary["今回"] - summary["職員全体"]).round(2)
+        st.dataframe(summary, use_container_width=True, hide_index=True)
+
+        st.subheader("見どころ")
+        good = top_rank.head(5)[["順位", "項目", "スコア"]]
+        weak = bottom_rank.head(5)[["順位", "項目", "スコア"]]
+        gcol, wcol = st.columns(2)
+        with gcol:
+            st.markdown("**上位5項目**")
+            st.dataframe(good, hide_index=True, use_container_width=True)
+        with wcol:
+            st.markdown("**下位5項目**")
+            st.dataframe(weak, hide_index=True, use_container_width=True)
+
+with tab2:
+    st.subheader("設問別スコアを深掘り")
+    c1, c2 = st.columns([1, 2])
+    selected_cat = c1.selectbox("カテゴリ", ["すべて"] + sorted(scores["カテゴリ"].dropna().unique().tolist()))
+    search = c2.text_input("設問キーワード検索", placeholder="例: やりがい / 上司 / 共有")
+
+    filtered = scores.copy()
+    if selected_cat != "すべて":
+        filtered = filtered[filtered["カテゴリ"] == selected_cat]
+    if search:
+        filtered = filtered[filtered["項目"].astype(str).str.contains(search, case=False, na=False)]
+
+    st.caption(f"{len(filtered)}件を表示")
+
+    chart_data = filtered.sort_values("当組織今回", ascending=False).head(20).copy()
+    chart_data["短縮項目"] = chart_data["項目"].astype(str).str.slice(0, 35) + "…"
+    fig = go.Figure()
+    fig.add_trace(go.Bar(
+        x=chart_data["当組織今回"], y=chart_data["短縮項目"], name="当組織今回", orientation="h"
+    ))
+    fig.add_trace(go.Bar(
+        x=chart_data["職員全体"], y=chart_data["短縮項目"], name="職員全体", orientation="h"
+    ))
+    fig.update_layout(barmode="group", height=700, yaxis={"categoryorder": "total ascending"})
+    st.plotly_chart(fig, use_container_width=True)
+
+    st.dataframe(
+        filtered[["カテゴリ", "項目", "当組織今回", "当組織前回", "職員全体", "経年ギャップ", "貴組織-全体"]]
+        .sort_values(["カテゴリ", "当組織今回"], ascending=[True, False]),
+        use_container_width=True,
+        hide_index=True
+    )
+
+with tab3:
+    st.subheader("5択以外の設問結果")
+    st.markdown("**1. エンゲージメント層の構成比**")
+    layers_long = engagement_layers.melt(
+        id_vars=["区分", "調査数"],
+        value_vars=["エンゲージメント層", "安住層", "個人主義層", "不満層"],
+        var_name="層", value_name="割合"
+    )
+    fig = px.bar(layers_long, x="区分", y="割合", color="層", text="割合", barmode="stack", height=450)
+    fig.update_traces(texttemplate="%{text:.1f}", textposition="inside")
+    fig.update_layout(yaxis_title="割合（％）")
+    st.plotly_chart(fig, use_container_width=True)
+
+    st.markdown("**2. Q18 仕事のやりがいを感じるとき**")
+    q18_chart = q18.melt(id_vars=["選択肢"], value_vars=["前回", "今回"], var_name="時点", value_name="割合")
+    fig = px.bar(q18_chart, x="割合", y="選択肢", color="時点", barmode="group", height=550)
+    st.plotly_chart(fig, use_container_width=True)
+
+    st.markdown("**3. Q32 仕事上言いたいことが言いにくい理由**")
+    q32_chart = q32.melt(id_vars=["選択肢"], value_vars=["前回", "今回"], var_name="時点", value_name="割合")
+    fig = px.bar(q32_chart, x="割合", y="選択肢", color="時点", barmode="group", height=520)
+    st.plotly_chart(fig, use_container_width=True)
+
+with tab4:
+    left, right = st.columns(2)
+    with left:
+        st.subheader("上位ランキング")
+        st.dataframe(top_rank, use_container_width=True, hide_index=True)
+    with right:
+        st.subheader("下位ランキング")
+        st.dataframe(bottom_rank, use_container_width=True, hide_index=True)
+
+st.markdown("---")
+st.info(
+    "このサンプルは、Excelの複数シートを「ブラウザで見るタブ構成」に置き換えた試作です。"
+    " 本番ではここにログイン認証と組織別権限を追加すれば、担当者ごとに自組織だけ閲覧できる形にできます。"
+)
